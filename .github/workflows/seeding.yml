@@ -12,12 +12,12 @@ on:
         required: false
         default: ""
       dry_run:
-        description: "true = chi in ra, khong gui that"
+        description: "true = khong gui that, ban xem truoc gui ve TK chinh"
         required: false
         default: "true"
 
 permissions:
-  contents: write
+  contents: write   # chi dung cho buoc keepalive
 
 concurrency:
   group: seeding
@@ -32,20 +32,38 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -r requirements.txt
+      - run: pip install -q -r requirements.txt
+      # state.json (ID nhom, mau da gui) luu trong cache rieng, KHONG commit vao repo public
+      - name: Restore state
+        uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: seeding-state-${{ github.run_id }}
+          restore-keys: seeding-state-
       - name: Run seeding
         env:
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
           TG_SESSION: ${{ secrets.TG_SESSION }}
           MAIN_ACCOUNT: ${{ secrets.MAIN_ACCOUNT }}
+          CHANNEL_LINK: ${{ secrets.CHANNEL_LINK }}
           SLOT: ${{ github.event.inputs.slot }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: python seeding.py
       - name: Save state
         if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: seeding-state-${{ github.run_id }}
+      # GitHub tat lich chay neu repo 60 ngay khong co commit -> moi thang commit 1 file ngay thang
+      - name: Keepalive
+        if: always() && github.event_name == 'schedule'
         run: |
-          git config user.name "seeding-bot"
-          git config user.email "seeding-bot@users.noreply.github.com"
-          git add state.json || true
-          git diff --cached --quiet || (git commit -m "update state [skip ci]" && git push)
+          if [ "$(date -u +%d)" = "01" ] && [ "$(date -u +%H)" = "14" ]; then
+            date -u +%Y-%m > .keepalive
+            git config user.name "bot"
+            git config user.email "bot@users.noreply.github.com"
+            git add .keepalive
+            git diff --cached --quiet || (git commit -m "keepalive [skip ci]" && git push)
+          fi

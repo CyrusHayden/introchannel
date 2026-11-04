@@ -2,6 +2,7 @@
 Seeding bot - Crypto Trading Halls
 Tai khoan Telegram phu (Telethon) dang recap ket qua trade vao cac nhom/channel
 ma TK phu da tham gia (tu quet), chia 3 khung gio. Chay tren GitHub Actions (repo public).
+Repo public -> log khong in ten nhom/noi dung; moi chi tiet gui rieng ve tai khoan chinh.
 
 Luong:
   1. Doc tin moi nhat tu tai khoan chinh (MAIN_ACCOUNT) gui sang tai khoan phu.
@@ -32,7 +33,7 @@ API_ID = int(os.environ["TG_API_ID"])
 API_HASH = os.environ["TG_API_HASH"]
 SESSION = os.environ["TG_SESSION"]
 MAIN_ACCOUNT = os.environ["MAIN_ACCOUNT"]          # username tai khoan chinh, vd: @hayden
-CHANNEL_LINK = os.environ.get("CHANNEL_LINK") or "https://t.me/cryptotradinghalls"
+CHANNEL_LINK = os.environ["CHANNEL_LINK"]               # secret, khong ghi trong code
 SKIP_WORDS = ["hall"]   # bo qua nhom/channel co chu nay trong ten (kenh cua minh)
 DRY_RUN = os.environ.get("DRY_RUN", "false").lower() == "true"
 DELAY_MIN = int(os.environ.get("DELAY_MIN", "90"))   # giay
@@ -212,7 +213,7 @@ async def main():
     chosen = [t for t in targets if t[0] % 3 == slot]
     by_key = {str(t[0]): t for t in chosen}
     groups = list(by_key.keys())
-    print(f"Khung {SLOT_NAMES[slot]} - {len(groups)}/{len(targets)} nhom - dry_run={DRY_RUN}")
+    print(f"Khung {slot} - {len(groups)}/{len(targets)} nhom - dry_run={DRY_RUN}")
     res = state.get("result")
     if not res:
         await client.send_message(main_ent, "⚠️ Seeding bot: chưa có kết quả nào. "
@@ -222,7 +223,7 @@ async def main():
 
     picks = pick_templates(groups, templates, state.get("last_template", {}))
     random.shuffle(groups)
-    report = []
+    report, previews = [], []
     for idx, key in enumerate(groups):
         _, name, entity = by_key[key]
         g = name
@@ -230,7 +231,7 @@ async def main():
         try:
             if DRY_RUN:
                 kind = "dry"
-                print(f"--- {g} (mau {picks[key] + 1})\n{text}\n")
+                previews.append(f"▫️ {g} (mẫu {picks[key] + 1}):\n{text}")
             else:
                 kind = await send_to_target(client, entity, text)
             state.setdefault("last_template", {})[key] = picks[key]
@@ -258,10 +259,24 @@ async def main():
             f"Kết quả dùng: {res['win']}W/{res['loss']}L, PnL {res['pnl']}% "
             f"({'mới' if is_new else 'cũ, ' + state.get('result_date', '')})\n")
     await client.send_message(main_ent, head + "\n".join(report or ["(không có nhóm trong khung này)"]))
+    if previews:  # chay thu: gui ban xem truoc tung tin ve tai khoan chinh
+        chunk = ""
+        for p in previews:
+            if len(chunk) + len(p) > 3500:
+                await client.send_message(main_ent, chunk, link_preview=False)
+                chunk = ""
+            chunk += p + "\n\n"
+        if chunk:
+            await client.send_message(main_ent, chunk, link_preview=False)
+    ok = sum(1 for r in report if r.startswith("✅"))
+    print(f"Xong: {ok}/{len(groups)} thanh cong")
     save_state(state)
     await client.disconnect()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
-    sys.exit(0)
+    try:
+        asyncio.run(main())
+    except Exception as e:  # noqa - chi in loai loi, khong in chi tiet (log public)
+        print(f"LOI: {type(e).__name__}")
+        sys.exit(1)
