@@ -1,0 +1,33 @@
+# 10 mau tin, ngan cach bang dong chi co ---
+# Bien: {win} {loss} {total} {winrate} {pnl} (pnl da co dau +/-) {link}
+# [chu](link) = chu bam vao duoc. Khong dung { } cho viec khac.
+---
+{win}/{total} signals win today. Gain {pnl}% profit. 💵💵
+Join [HERE]({link}) & get more FREE signals
+---
+Today: {win}/{total} signals hit TP ✅ Total {pnl}% profit 🚀
+Free signals [HERE]({link})
+---
+{win} out of {total} signals in profit today 🔥 {pnl}% gain
+Get the next ones FREE 👉 [JOIN]({link})
+---
+Another green day 📈 {win}/{total} wins, {pnl}% profit 💰
+More FREE signals [HERE]({link})
+---
+{pnl}% profit today 💵 {win}/{total} signals won
+Join [HERE]({link}) for free calls
+---
+✅ {win}/{total} signals win | 💰 {pnl}% profit
+Want tomorrow's signals? [Join FREE]({link})
+---
+Closed the day with {pnl}% profit 🎯 {win}/{total} wins
+Get FREE signals daily 👉 [HERE]({link})
+---
+{win}/{total} TP hit today 💸 Gain {pnl}%
+Free signals waiting for you [HERE]({link})
+---
+Today's result: {win} wins / {total} signals 🔥 {pnl}% profit
+Join [HERE]({link}) & catch the next move
+---
+{winrate}% winrate today ({win}/{total}) 🚀 {pnl}% profit 💵
+More FREE signals 👉 [JOIN HERE]({link})
