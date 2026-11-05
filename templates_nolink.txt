@@ -1,0 +1,32 @@
+# 10 mau KHONG LINK - dung cho nhom da xoa tin co link (link nam o bio TK phu)
+# Bien: {win} {loss} {total} {winrate} {pnl} (pnl da co dau +/-). KHONG dung {link}.
+---
+{win}/{total} signals win today. Gain {pnl}% profit 💵💵
+Free signals daily, link in my bio 👆
+---
+Today: {win}/{total} signals hit TP ✅ Total {pnl}% profit 🚀
+Want the next ones? Check my bio
+---
+{win} out of {total} signals in profit today 🔥 {pnl}% gain
+Free channel link is in my bio
+---
+Another green day 📈 {win}/{total} wins, {pnl}% profit 💰
+More FREE signals, see my bio
+---
+{pnl}% profit today 💵 {win}/{total} signals won
+Free calls every day, tap my profile 👆
+---
+✅ {win}/{total} signals win | 💰 {pnl}% profit
+Tomorrow's signals are free, link in bio
+---
+Closed the day with {pnl}% profit 🎯 {win}/{total} wins
+I share them FREE, check my bio
+---
+{win}/{total} TP hit today 💸 Gain {pnl}%
+Free signals channel in my bio
+---
+Today's result: {win} wins / {total} signals 🔥 {pnl}% profit
+Catch the next move, link in my bio
+---
+{winrate}% winrate today ({win}/{total}) 🚀 {pnl}% profit 💵
+Join FREE, link in my bio 👆

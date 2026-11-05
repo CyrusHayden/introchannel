@@ -28,6 +28,8 @@ from telethon.tl.types import Channel, Chat
 BASE = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(BASE, "state.json")
 TEMPLATES_FILE = os.path.join(BASE, "templates.txt")
+NOLINK_FILE = os.path.join(BASE, "templates_nolink.txt")   # mau "link in my bio"
+CHECK_AFTER = int(os.environ.get("CHECK_AFTER", "120"))   # giay: cho toi thieu truoc khi kiem tra tin bi xoa
 
 API_ID = int(os.environ["TG_API_ID"])
 API_HASH = os.environ["TG_API_HASH"]
@@ -67,8 +69,8 @@ def save_state(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
-def load_templates():
-    with open(TEMPLATES_FILE, encoding="utf-8") as f:
+def load_templates(path=TEMPLATES_FILE):
+    with open(path, encoding="utf-8") as f:
         parts = [p.strip() for p in f.read().split("\n---\n")]
     return [p for p in parts if p and not p.startswith("#")]
 
@@ -202,18 +204,80 @@ async def find_comment_post(client, entity):
 
 
 async def send_to_target(client, entity, text):
+    """Tra ve (kieu, tin da gui)."""
     if isinstance(entity, Channel) and entity.broadcast:
         post = await find_comment_post(client, entity)
-        await client.send_message(entity, text, comment_to=post.id, link_preview=False)
-        return "comment"
-    await client.send_message(entity, text, link_preview=False)
-    return "msg"
+        msg = await client.send_message(entity, text, comment_to=post.id, link_preview=False)
+        return "comment", msg
+    msg = await client.send_message(entity, text, link_preview=False)
+    return "msg", msg
+
+
+async def still_there(client, msg):
+    """Tin con hay da bi xoa. Loi khi doc (bi kick...) -> coi nhu da bi xoa."""
+    try:
+        m = await client.get_messages(msg.peer_id, ids=msg.id)
+    except Exception:  # noqa
+        return False
+    return m is not None and not getattr(m, "action", None) and bool(getattr(m, "message", None))
+
+
+class StopAll(Exception):
+    """PEER_FLOOD / FloodWait dai -> dung ca khung."""
+
+
+async def leave(client, entity, g, why):
+    try:
+        await client.delete_dialog(entity)
+        return f"🚪 {g}: {why} → đã tự rời"
+    except Exception:  # noqa
+        return f"🚫 {g}: {why}, rời không được"
+
+
+async def try_send(client, entity, g, text):
+    """Gui 1 tin. Tra ve (tin, None) neu gui duoc, (None, dong bao cao) neu khong.
+    Raise StopAll khi phai dung ca khung."""
+    try:
+        kind, msg = await send_to_target(client, entity, text)
+        return msg, None
+    except NoCommentPost:
+        return None, f"🚫 {g}: 10 bài gần nhất không bài nào mở bình luận"
+    except errors.ChatGuestSendForbiddenError:
+        return None, (f"🚫 {g}: phải vào nhóm thảo luận của channel mới comment được "
+                      f"(bạn tự vào nếu muốn)")
+    except errors.FloodWaitError as e:
+        if e.seconds > 300:
+            raise StopAll(f"⏳ {g}: FloodWait {e.seconds}s - dừng khung này")
+        await asyncio.sleep(e.seconds + 5)
+        return None, f"⏳ {g}: FloodWait {e.seconds}s - bỏ qua nhóm này"
+    except errors.SlowModeWaitError as e:
+        return None, f"🐢 {g}: slow mode {e.seconds}s - bỏ qua"
+    except (errors.ChatWriteForbiddenError, errors.ChatRestrictedError,
+            errors.UserBannedInChannelError, errors.ChannelPrivateError) as e:
+        # nhom cam nhan / da chan TK phu -> tu roi nhom (channel thi chi bao,
+        # vi bi cam o nhom binh luan khong co nghia la nen roi channel)
+        if isinstance(entity, Channel) and entity.broadcast:
+            return None, f"🚫 {g}: không được comment ({type(e).__name__})"
+        return None, await leave(client, entity, g, "không có quyền gửi")
+    except errors.PeerFloodError:
+        raise StopAll(f"🛑 {g}: PEER_FLOOD - Telegram nghi spam, dừng hẳn")
+    except Exception as e:  # noqa
+        return None, f"❌ {g}: {type(e).__name__}: {e}"
+
+
+async def wait_since(t0):
+    """Cho cho du CHECK_AFTER giay ke tu lan gui cuoi."""
+    left = CHECK_AFTER - (asyncio.get_event_loop().time() - t0)
+    if left > 0:
+        await asyncio.sleep(left)
 
 
 async def main():
     slot = detect_slot()
     state = load_state()
     templates = load_templates()
+    nolink_tpl = load_templates(NOLINK_FILE)
+    nolink = state.setdefault("nolink", {})   # nhom da xoa tin co link -> gui ban "in my bio"
 
     client = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
     await client.start()
@@ -231,63 +295,110 @@ async def main():
         save_state(state)
         return
 
-    picks = pick_templates(groups, templates, state.get("last_template", {}))
+    last_l = state.setdefault("last_template", {})
+    last_n = state.setdefault("last_template_nolink", {})
+    g_link = [k for k in groups if k not in nolink]
+    g_bio = [k for k in groups if k in nolink]
+    picks = pick_templates(g_link, templates, last_l)
+    picks_bio = pick_templates(g_bio, nolink_tpl, last_n)
+
+    def text_for(key, bio):
+        if bio:
+            return nolink_tpl[picks_bio[key]].format(**res)
+        return templates[picks[key]].format(link=CHANNEL_LINK, **res)
+
+    def label(key, bio):
+        return f"mẫu bio {picks_bio[key] + 1}" if bio else f"mẫu {picks[key] + 1}"
+
     random.shuffle(groups)
-    report, previews = [], []
-    for idx, key in enumerate(groups):
-        _, name, entity = by_key[key]
-        g = name
-        text = templates[picks[key]].format(link=CHANNEL_LINK, **res)
-        sent = False
-        try:
-            if DRY_RUN:
-                kind = "dry"
+    report = {}          # key -> dong bao cao (cap nhat sau khi kiem tra xoa)
+    previews, sent = [], {}   # sent: key -> (tin, la_ban_bio)
+    stop = None
+    t_last = 0.0
+    for key in groups:
+        _, g, entity = by_key[key]
+        bio = key in nolink
+        text = text_for(key, bio)
+        if DRY_RUN:
+            try:
                 if isinstance(entity, Channel) and entity.broadcast:
                     await find_comment_post(client, entity)  # kiem tra truoc
-                previews.append(f"▫️ {g} (mẫu {picks[key] + 1}):\n{text}")
-            else:
-                kind = await send_to_target(client, entity, text)
-                sent = True
-            state.setdefault("last_template", {})[key] = picks[key]
-            report.append(f"✅ {g} ({kind}, mẫu {picks[key] + 1})")
-        except NoCommentPost:
-            report.append(f"🚫 {g}: 10 bài gần nhất không bài nào mở bình luận")
-        except errors.ChatGuestSendForbiddenError:
-            report.append(f"🚫 {g}: phải vào nhóm thảo luận của channel mới comment được "
-                          f"(bạn tự vào nếu muốn)")
-        except errors.FloodWaitError as e:
-            report.append(f"⏳ {g}: FloodWait {e.seconds}s - dừng khung này")
-            if e.seconds > 300:
-                break
-            await asyncio.sleep(e.seconds + 5)
-        except errors.SlowModeWaitError as e:
-            report.append(f"🐢 {g}: slow mode {e.seconds}s - bỏ qua")
-        except (errors.ChatWriteForbiddenError, errors.ChatRestrictedError,
-                errors.UserBannedInChannelError, errors.ChannelPrivateError) as e:
-            # nhom cam nhan / da chan TK phu -> tu roi nhom (channel thi chi bao,
-            # vi bi cam o nhom binh luan khong co nghia la nen roi channel)
-            if isinstance(entity, Channel) and entity.broadcast:
-                report.append(f"🚫 {g}: không được comment ({type(e).__name__})")
-            else:
-                try:
-                    await client.delete_dialog(entity)
-                    report.append(f"🚪 {g}: không có quyền gửi → đã tự rời nhóm")
-                except Exception:  # noqa
-                    report.append(f"🚫 {g}: không có quyền gửi, rời nhóm không được "
-                                  f"({type(e).__name__})")
-        except errors.PeerFloodError:
-            report.append(f"🛑 {g}: PEER_FLOOD - Telegram nghi spam, dừng hẳn")
-            break
-        except Exception as e:  # noqa
-            report.append(f"❌ {g}: {type(e).__name__}: {e}")
-        save_state(state)
-        if sent and idx < len(groups) - 1:  # chi cho sau lan gui thanh cong
+                previews.append(f"▫️ {g} ({label(key, bio)}):\n{text}")
+                report[key] = f"✅ {g} (dry, {label(key, bio)})"
+            except NoCommentPost:
+                report[key] = f"🚫 {g}: 10 bài gần nhất không bài nào mở bình luận"
+            continue
+        if sent:  # gian cach chi sau lan gui thanh cong
             await asyncio.sleep(random.randint(DELAY_MIN, DELAY_MAX))
+        try:
+            msg, err = await try_send(client, entity, g, text)
+        except StopAll as e:
+            report[key] = str(e)
+            stop = e
+            break
+        if msg:
+            sent[key] = (msg, bio)
+            t_last = asyncio.get_event_loop().time()
+            (last_n if bio else last_l)[key] = (picks_bio if bio else picks)[key]
+            report[key] = f"✅ {g} ({label(key, bio)})"
+        else:
+            report[key] = err
+        save_state(state)
 
+    # --- kiem tra tin con hay bi xoa (bot chong link xoa trong vai giay) ---
+    if sent:
+        await wait_since(t_last)
+        resend = []
+        for key, (msg, bio) in sent.items():
+            if await still_there(client, msg):
+                continue
+            _, g, entity = by_key[key]
+            if bio:   # ban khong link cung bi xoa -> nhom cam quang cao noi chung
+                report[key] = await leave(client, entity, g, "bị xóa cả tin không link")
+                nolink.pop(key, None)
+            else:
+                nolink[key] = True     # tu nay gui ban "in my bio"
+                resend.append(key)
+        save_state(state)
+
+        # gui lai ban "in my bio" cho nhom vua xoa tin co link
+        if resend and not stop:
+            picks_bio.update(pick_templates(resend, nolink_tpl, last_n))
+            resent = {}
+            for i, key in enumerate(resend):
+                _, g, entity = by_key[key]
+                await asyncio.sleep(random.randint(DELAY_MIN, DELAY_MAX))
+                try:
+                    msg, err = await try_send(client, entity, g, text_for(key, True))
+                except StopAll as e:
+                    report[key] = str(e)
+                    break
+                if msg:
+                    resent[key] = msg
+                    t_last = asyncio.get_event_loop().time()
+                    last_n[key] = picks_bio[key]
+                else:
+                    report[key] = f"🔁 {g}: tin có link bị xóa; gửi bản bio lỗi → {err}"
+            save_state(state)
+            if resent:
+                await wait_since(t_last)
+                for key, msg in resent.items():
+                    _, g, entity = by_key[key]
+                    if await still_there(client, msg):
+                        report[key] = (f"🔁 {g}: tin có link bị xóa → đã gửi {label(key, True)}, "
+                                       f"còn (từ nay gửi bản bio)")
+                    else:
+                        report[key] = await leave(client, entity, g, "bị xóa cả 2 bản")
+                        nolink.pop(key, None)
+        elif resend:
+            for key in resend:
+                report[key] = f"🔁 {by_key[key][1]}: tin có link bị xóa (lần sau gửi bản bio)"
+
+    lines = [report[k] for k in groups if k in report]
     head = (f"📤 Seeding {SLOT_NAMES[slot]}{' [DRY RUN]' if DRY_RUN else ''}\n"
             f"Kết quả dùng: {res['win']}W/{res['loss']}L, PnL {res['pnl']}% "
             f"({'mới' if is_new else 'cũ, ' + state.get('result_date', '')})\n")
-    await client.send_message(main_ent, head + "\n".join(report or ["(không có nhóm trong khung này)"]))
+    await client.send_message(main_ent, head + "\n".join(lines or ["(không có nhóm trong khung này)"]))
     if previews:  # chay thu: gui ban xem truoc tung tin ve tai khoan chinh
         chunk = ""
         for p in previews:
@@ -297,8 +408,8 @@ async def main():
             chunk += p + "\n\n"
         if chunk:
             await client.send_message(main_ent, chunk, link_preview=False)
-    ok = sum(1 for r in report if r.startswith("✅"))
-    print(f"Xong: {ok}/{len(groups)} thanh cong")
+    ok = sum(1 for r in lines if r[0] in "✅🔁")
+    print(f"Xong: {ok}/{len(groups)} con tin")
     save_state(state)
     await client.disconnect()
 
