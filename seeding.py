@@ -188,13 +188,23 @@ async def fetch_new_result(client, state):
     return main, False
 
 
+class NoCommentPost(Exception):
+    """Khong co bai gan day nao mo binh luan."""
+
+
+async def find_comment_post(client, entity):
+    """Bai moi nhat CON MO BINH LUAN (bo qua tin he thong, bai tat binh luan,
+    bai dang truoc khi channel mo binh luan)."""
+    async for m in client.iter_messages(entity, limit=10):
+        if m.action is None and m.replies and m.replies.comments:
+            return m
+    raise NoCommentPost()
+
+
 async def send_to_target(client, entity, text):
     if isinstance(entity, Channel) and entity.broadcast:
-        # channel: reply (comment) vao bai moi nhat
-        posts = await client.get_messages(entity, limit=1)
-        if not posts:
-            raise RuntimeError("channel chua co bai")
-        await client.send_message(entity, text, comment_to=posts[0].id, link_preview=False)
+        post = await find_comment_post(client, entity)
+        await client.send_message(entity, text, comment_to=post.id, link_preview=False)
         return "comment"
     await client.send_message(entity, text, link_preview=False)
     return "msg"
@@ -228,14 +238,23 @@ async def main():
         _, name, entity = by_key[key]
         g = name
         text = templates[picks[key]].format(link=CHANNEL_LINK, **res)
+        sent = False
         try:
             if DRY_RUN:
                 kind = "dry"
+                if isinstance(entity, Channel) and entity.broadcast:
+                    await find_comment_post(client, entity)  # kiem tra truoc
                 previews.append(f"▫️ {g} (mẫu {picks[key] + 1}):\n{text}")
             else:
                 kind = await send_to_target(client, entity, text)
+                sent = True
             state.setdefault("last_template", {})[key] = picks[key]
             report.append(f"✅ {g} ({kind}, mẫu {picks[key] + 1})")
+        except NoCommentPost:
+            report.append(f"🚫 {g}: 10 bài gần nhất không bài nào mở bình luận")
+        except errors.ChatGuestSendForbiddenError:
+            report.append(f"🚫 {g}: phải vào nhóm thảo luận của channel mới comment được "
+                          f"(bạn tự vào nếu muốn)")
         except errors.FloodWaitError as e:
             report.append(f"⏳ {g}: FloodWait {e.seconds}s - dừng khung này")
             if e.seconds > 300:
@@ -245,14 +264,24 @@ async def main():
             report.append(f"🐢 {g}: slow mode {e.seconds}s - bỏ qua")
         except (errors.ChatWriteForbiddenError, errors.ChatRestrictedError,
                 errors.UserBannedInChannelError, errors.ChannelPrivateError) as e:
-            report.append(f"🚫 {g}: không có quyền gửi ({type(e).__name__})")
+            # nhom cam nhan / da chan TK phu -> tu roi nhom (channel thi chi bao,
+            # vi bi cam o nhom binh luan khong co nghia la nen roi channel)
+            if isinstance(entity, Channel) and entity.broadcast:
+                report.append(f"🚫 {g}: không được comment ({type(e).__name__})")
+            else:
+                try:
+                    await client.delete_dialog(entity)
+                    report.append(f"🚪 {g}: không có quyền gửi → đã tự rời nhóm")
+                except Exception:  # noqa
+                    report.append(f"🚫 {g}: không có quyền gửi, rời nhóm không được "
+                                  f"({type(e).__name__})")
         except errors.PeerFloodError:
             report.append(f"🛑 {g}: PEER_FLOOD - Telegram nghi spam, dừng hẳn")
             break
         except Exception as e:  # noqa
             report.append(f"❌ {g}: {type(e).__name__}: {e}")
         save_state(state)
-        if idx < len(groups) - 1 and not DRY_RUN:
+        if sent and idx < len(groups) - 1:  # chi cho sau lan gui thanh cong
             await asyncio.sleep(random.randint(DELAY_MIN, DELAY_MAX))
 
     head = (f"📤 Seeding {SLOT_NAMES[slot]}{' [DRY RUN]' if DRY_RUN else ''}\n"
