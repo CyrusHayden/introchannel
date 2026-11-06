@@ -273,6 +273,10 @@ async def wait_since(t0):
 
 
 async def main():
+    # Cong tac tam dung: co file PAUSED trong repo -> thoat ngay, khong ket noi Telegram
+    if os.path.exists(os.path.join(BASE, "PAUSED")):
+        print("Tam dung (co file PAUSED) - khong lam gi")
+        return
     slot = detect_slot()
     state = load_state()
     templates = load_templates()
